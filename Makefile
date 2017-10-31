@@ -1,3 +1,5 @@
+OS=$(shell uname -s)
+
 CC = clang++
 LINK = clang++
 PROGRAM = test
@@ -11,13 +13,17 @@ INCLUDE_LINUX = -I/src/git/folly/
 LDFLAGS_LINUX = -L$(FOLLY_PATH_LINUX)
 LIBS_LINUX = -lboost_context -lpthread
 
+ifeq ($(OS), Darwin)
 INCLUDE_MAC =
 LDFLAGS_MAC =
 LIBS_MAC = -lboost_context-mt
+endif
 
+ifeq ($(OS), Linux)
 INCLUDE = $(INCLUDE_LINUX)
 LDFLAGS = $(LDFLAGS_LINUX)
 LIBS = $(LIBS_COMMON) $(LIBS_LINUX)
+endif
 
 all : $(PROGRAM)
 
