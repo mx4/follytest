@@ -41,3 +41,6 @@ clean:
 	rm -f $(PROGRAM) *.o *~
 run:
 	LD_LIBRARY_PATH=$(FOLLY_PATH_LINUX) ./test
+
+vgrun:
+	LD_LIBRARY_PATH=$(FOLLY_PATH_LINUX) valgrind ./test

@@ -20,16 +20,6 @@ struct FiberManagerThread {
    std::thread       th;
 };
 
-/*
- * Rudimentary fiber function.
- */
-void
-fiberFunc(void *clientData)
-{
-   printf(".");
-   fflush(stdout);
-}
-
 
 /*
  * Each thread function.
@@ -49,7 +39,10 @@ ManagerFunc(FiberManagerThread *manager,
 
    manager->eb->runOnDestruction(&cb);
    manager->stop->wait();
-   manager->eb->~EventBase();
+   delete manager->eb;
+   manager->eb = nullptr;
+   delete manager->stop;
+   manager->stop = nullptr;
 
    printf("thread: %d gone.\n", idx);
 }
@@ -89,13 +82,6 @@ main(int argc, char* argv[])
    }
 
    printf("all threads stopped.\n");
-
-   for (auto i = 0; i < numThreads; i++) {
-      delete managers[i].eb;
-      delete managers[i].stop;
-   }
-
-   printf("all data cleaned.\n");
 
    printf("done.\n");
 }
