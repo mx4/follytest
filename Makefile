@@ -3,9 +3,21 @@ LINK = clang++
 PROGRAM = test
 OBJECTS = $(PROGRAM).o
 CFLAGS = -std=c++1y -fno-omit-frame-pointer -g
-INCLUDE =
-LDFLAGS =
-LIBS = -lfolly -lglog -lfollybenchmark -lboost_context-mt
+
+LIBS_COMMON = -lfolly -lglog
+
+FOLLY_PATH_LINUX = /src/git/folly/folly/.libs
+INCLUDE_LINUX = -I/src/git/folly/
+LDFLAGS_LINUX = -L$(FOLLY_PATH_LINUX)
+LIBS_LINUX = -lboost_context -lpthread
+
+INCLUDE_MAC =
+LDFLAGS_MAC =
+LIBS_MAC = -lboost_context-mt
+
+INCLUDE = $(INCLUDE_LINUX)
+LDFLAGS = $(LDFLAGS_LINUX)
+LIBS = $(LIBS_COMMON) $(LIBS_LINUX)
 
 all : $(PROGRAM)
 
@@ -18,6 +30,4 @@ $(PROGRAM) : $(OBJECTS)
 clean:
 	rm -f $(PROGRAM) *.o *~
 run:
-	LD_LIBRARY_PATH=/src/git/folly/folly/.libs ./test
-
-
+	LD_LIBRARY_PATH=$(FOLLY_PATH_LINUX) ./test
