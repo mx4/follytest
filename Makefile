@@ -13,16 +13,20 @@ INCLUDE_LINUX = -I/src/git/folly/
 LDFLAGS_LINUX = -L$(FOLLY_PATH_LINUX)
 LIBS_LINUX = -lboost_context -lpthread
 
-ifeq ($(OS), Darwin)
 INCLUDE_MAC =
 LDFLAGS_MAC =
 LIBS_MAC = -lboost_context-mt
-endif
 
 ifeq ($(OS), Linux)
 INCLUDE = $(INCLUDE_LINUX)
 LDFLAGS = $(LDFLAGS_LINUX)
 LIBS = $(LIBS_COMMON) $(LIBS_LINUX)
+endif
+
+ifeq ($(OS), Darwin)
+INCLUDE = $(INCLUDE_MAC)
+LDFLAGS = $(LDFLAGS_MAC)
+LIBS = $(LIBS_COMMON) $(LIBS_MAC)
 endif
 
 all : $(PROGRAM)
