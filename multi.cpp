@@ -1,8 +1,5 @@
-#include <stdio.h>
-
-#include <string.h>
-
 #include <thread>
+#include <iostream>
 
 #include <folly/fibers/Fiber.h>
 #include <folly/fibers/FiberManagerMap.h>
@@ -15,15 +12,15 @@
 using namespace folly;
 
 struct FiberManagerThread {
-   EventBase        *evb;
-   folly::Baton<>   *stop;
-   std::thread       th;
+   EventBase    *evb;
+   Baton<>      *stop;
+   std::thread   th;
 };
 
 static void
 FiberFunc(void)
 {
-   printf("Yo.\n");
+   std::cout << "Yo." << std::endl;
 }
 
 
@@ -36,12 +33,12 @@ ManagerFunc(FiberManagerThread *manager,
 {
    auto ebm = EventBaseManager::get();
 
-   printf("thread: %d\n", idx);
+   std::cout << "thread: " << idx << std::endl;
 
    ebm->setEventBase(manager->evb, false);
 
    printf("before.\n");
-   folly::fibers::getFiberManager(*manager->evb).addTask(FiberFunc);
+   fibers::getFiberManager(*manager->evb).addTask(FiberFunc);
    printf("after.\n");
 
    manager->evb->loopForever();
@@ -55,7 +52,7 @@ ManagerFunc(FiberManagerThread *manager,
    delete manager->stop;
    manager->stop = nullptr;
 
-   printf("thread: %d gone.\n", idx);
+   std::cout << "thread: " << idx << " gone." << std::endl;
 }
 
 
@@ -68,9 +65,9 @@ main(int argc, char* argv[])
    static const int numThreads = 4;
    FiberManagerThread managers[numThreads];
 
-   folly::init(&argc, &argv);
+   init(&argc, &argv);
 
-   printf("init done.\n");
+   std::cout << "init done." << std::endl;
 
    for (auto i = 0; i < numThreads; i++) {
       managers[i].stop = new folly::Baton<>();
@@ -78,13 +75,13 @@ main(int argc, char* argv[])
       managers[i].th = std::thread(ManagerFunc, &managers[i], i);
    }
 
-   printf("all threads created.\n");
+   std::cout << "all threads created." << std::endl;
 
    for (auto i = 0; i < numThreads; i++) {
       managers[i].evb->waitUntilRunning();
    }
 
-   printf("all threads settled.\n");
+   std::cout << "all threads settled." << std::endl;
 
    for (auto i = 0; i < numThreads; i++) {
       managers[i].evb->terminateLoopSoon();
@@ -92,28 +89,6 @@ main(int argc, char* argv[])
       managers[i].th.join();
    }
 
-   printf("all threads stopped.\n");
-
-   printf("done.\n");
+   std::cout << "all threads stopped." << std::endl;
+   std::cout << "done." << std::endl;
 }
-
-/*
-int main(int argc, char* argv[])
-{
-   int numThreads = 4;
-   folly::EventBase evb;
-
-   folly::init(&argc, &argv);
-
-   printf("before.\n");
-   folly::fibers::getFiberManager(evb).addTask([&]() { f(nullptr); });
-   printf("after.\n");
-
-   for (size_t i = 0; i < 1000 * 1000; i++) {
-      folly::fibers::getFiberManager(evb).addTask([&]() { f(nullptr); });
-   }
-   printf("sent.\n");
-   evb.loop();
-   printf("done.\n");
-}
-*/
