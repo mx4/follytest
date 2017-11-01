@@ -1,108 +1,44 @@
 #include <stdio.h>
-
 #include <string.h>
-
 #include <thread>
+#include <chrono>
 
 #include <folly/fibers/Fiber.h>
 #include <folly/fibers/FiberManagerMap.h>
 #include <folly/init/Init.h>
-
 #include <folly/Function.h>
-#include <folly/io/async/ScopedEventBaseThread.h>
-#include <folly/io/async/EventBaseManager.h>
 
 using namespace folly;
 
-struct FiberManagerThread {
-   EventBase        *eb;
-   folly::Baton<>   *stop;
-   std::thread       th;
-};
 
-
-/*
- * Each thread function.
- */
-static void
-ManagerFunc(FiberManagerThread *manager,
-            int                 idx)
-{
-   auto ebm = EventBaseManager::get();
-
-   printf("thread: %d\n", idx);
-
-   ebm->setEventBase(manager->eb, false);
-   manager->eb->loopForever();
-
-   EventBase::StackFunctionLoopCallback cb([=] { ebm->clearEventBase(); });
-
-   manager->eb->runOnDestruction(&cb);
-   manager->stop->wait();
-   delete manager->eb;
-   manager->eb = nullptr;
-   delete manager->stop;
-   manager->stop = nullptr;
-
-   printf("thread: %d gone.\n", idx);
-}
-
-
-/*
- * Entry point.
- */
-int
-main(int argc, char* argv[])
-{
-   static const int numThreads = 4;
-   FiberManagerThread managers[numThreads];
-
-   folly::init(&argc, &argv);
-
-   printf("init done.\n");
-
-   for (auto i = 0; i < numThreads; i++) {
-      managers[i].stop = new folly::Baton<>();
-      managers[i].eb = new EventBase();
-      managers[i].th = std::thread(ManagerFunc, &managers[i], i);
-   }
-
-   printf("all threads created.\n");
-
-   for (auto i = 0; i < numThreads; i++) {
-      managers[i].eb->waitUntilRunning();
-   }
-
-   printf("all threads settled.\n");
-
-   for (auto i = 0; i < numThreads; i++) {
-      managers[i].eb->terminateLoopSoon();
-      managers[i].stop->post();
-      managers[i].th.join();
-   }
-
-   printf("all threads stopped.\n");
-
-   printf("done.\n");
-}
-
-/*
 int main(int argc, char* argv[])
 {
-   int numThreads = 4;
    folly::EventBase evb;
+   folly::fibers::Baton b1;
+   folly::fibers::Baton b2;
+   std::atomic<uint64_t> n{0};
+   const uint64_t numIters = 2000 * 10000;
 
    folly::init(&argc, &argv);
 
-   printf("before.\n");
-   folly::fibers::getFiberManager(evb).addTask([&]() { f(nullptr); });
-   printf("after.\n");
+   auto t0 = std::chrono::steady_clock::now();
+   folly::fibers::getFiberManager(evb).addTask([&]() {
+      while (n < numIters) {
+         b2.post();
+         b1.wait();
+         n++;
+      }
+   });
+   folly::fibers::getFiberManager(evb).addTask([&]() {
+      while (n < numIters) {
+         b2.wait();
+         b1.post();
+         n++;
+      }
+   });
 
-   for (size_t i = 0; i < 1000 * 1000; i++) {
-      folly::fibers::getFiberManager(evb).addTask([&]() { f(nullptr); });
-   }
-   printf("sent.\n");
    evb.loop();
-   printf("done.\n");
+   auto elapsed = std::chrono::steady_clock::now() - t0;
+   printf("done in %.1f msec\n", elapsed / std::chrono::milliseconds(1) * 1.0);
+   printf("-> %.1f nsec / switch\n", elapsed / numIters / std::chrono::nanoseconds(1) * 1.0);
 }
-*/
