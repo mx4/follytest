@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <string.h>
 #include <thread>
 #include <chrono>
 
@@ -16,25 +15,28 @@ int main(int argc, char* argv[])
    folly::EventBase evb;
    folly::fibers::Baton b1;
    folly::fibers::Baton b2;
-   std::atomic<uint64_t> n{0};
-   const uint64_t numIters = 2000 * 10000;
+   const uint64_t numIters = 10 * 1000 * 1000;
+   volatile bool done = false;
 
    folly::init(&argc, &argv);
 
+   printf("starting..\n");
    auto t0 = std::chrono::steady_clock::now();
    folly::fibers::getFiberManager(evb).addTask([&]() {
-      while (n < numIters) {
+      while (!done) {
          b2.post();
          b1.wait();
-         n++;
       }
    });
    folly::fibers::getFiberManager(evb).addTask([&]() {
+      uint64_t n = 0;
       while (n < numIters) {
          b2.wait();
          b1.post();
          n++;
       }
+      done = true;
+      printf("done\n");
    });
 
    evb.loop();
