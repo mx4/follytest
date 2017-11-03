@@ -1,14 +1,14 @@
 OS=$(shell uname -s)
 
-CC = clang++
-LINK = clang++
-CFLAGS = -std=c++1y -fno-omit-frame-pointer -g -O2
+CXX = clang++
+LD = clang++
+CXXFLAGS = -std=c++14 -fno-omit-frame-pointer -g
 
 LIBS_COMMON = -lfolly -lglog
 LIBS_Linux  = -lboost_context -lpthread -latomic
 LIBS_Darwin = -lboost_context-mt
 
-LIBS = $(LIBS_COMMON) $(LIBS_$(OS))
+LDLIBS = $(LIBS_COMMON) $(LIBS_$(OS))
 
 SRC = multi.cpp ping_pong.cpp
 OBJ = $(SRC:.cpp=.o)
@@ -18,10 +18,10 @@ all : $(BIN)
 $(OBJ): $(SRC)
 
 %: %.o
-	$(LINK) -o $@ $(LIBS) $<
+	$(LD) $(LDLIBS) -o $@ $<
 
 .cpp.o:
-	$(CC) $(CFLAGS) -c $<
+	$(CXX) $(CXXFLAGS) -c $<
 
 clean:
-	rm -f $(BIN) *.o *~
+	rm -f $(BIN) $(OBJ) *~
