@@ -63,8 +63,6 @@ manager_func(fiber_mgr *manager)
 
    ebm->setEventBase(manager->evb, false);
 
-   fibers::getFiberManager(*manager->evb).addTask(fiber_func);
-
    manager->evb->loopForever();
 
    manager->evb->runOnDestruction(&cb);
@@ -118,6 +116,14 @@ fiber_exit()
    printf("fiber_exit: done.\n");
 }
 
+static void
+fiber_run_in_each_manager()
+{
+   for (auto&& manager : state.managers) {
+      fibers::getFiberManager(*manager->evb).addTaskRemote(fiber_func);
+   }
+}
+
 
 /*
  * Entry point.
@@ -128,6 +134,8 @@ main(int argc, char* argv[])
    init(&argc, &argv);
 
    fiber_init();
+
+   fiber_run_in_each_manager();
 
    fiber_exit();
 
