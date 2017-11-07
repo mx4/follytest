@@ -83,7 +83,7 @@ fiber_init()
    for (auto i = 0; i < num_cpus; i++) {
       auto manager = new fiber_mgr;
 
-      manager->stop = new folly::Baton<>();
+      manager->stop = new Baton<>();
       manager->evb  = new EventBase();
       manager->idx  = i;
       manager->th   = std::thread(manager_func, manager);
@@ -124,7 +124,6 @@ fiber_run_in_each_manager()
    }
 }
 
-
 /*
  * Entry point.
  */
@@ -134,9 +133,7 @@ main(int argc, char* argv[])
    init(&argc, &argv);
 
    fiber_init();
-
    fiber_run_in_each_manager();
-
    fiber_exit();
 
    return 0;
