@@ -1,7 +1,8 @@
 #include <thread>
-#include <iostream>
 #include <vector>
+#include <sstream>
 #include <cassert>
+#include <iostream>
 
 #include <folly/fibers/Fiber.h>
 #include <folly/fibers/FiberManagerMap.h>
@@ -11,21 +12,23 @@
 #include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/io/async/EventBaseManager.h>
 
+
 using namespace folly;
 
-struct FiberManagerThread {
+struct fiber_mgr {
    EventBase   *evb;
    Baton<>     *stop;
    std::thread  th;
+   uint32_t     idx;
 };
 
-
 struct fiber_state {
-   uint32_t                          num_cpus{0};
-   std::vector<FiberManagerThread *> managers;
+   uint32_t                 num_managers{0};
+   std::vector<fiber_mgr *> managers;
 };
 
 static struct fiber_state state;
+
 
 /*
  * The function invoked in the context of a fiber.
@@ -33,8 +36,10 @@ static struct fiber_state state;
 static void
 fiber_func(void)
 {
-   auto id = std::this_thread::get_id();
-   std::cout << "Fiber running in thread: " << id << std::endl;
+   std::ostringstream ss;
+
+   ss << std::this_thread::get_id();
+   printf("fiber running in thread: %s\n", ss.str().c_str());
 }
 
 
@@ -49,12 +54,12 @@ get_num_cpus()
  * Each thread function.
  */
 static void
-manager_func(FiberManagerThread *manager,
-             int                 idx)
+manager_func(fiber_mgr *manager)
 {
    auto ebm = EventBaseManager::get();
+   EventBase::StackFunctionLoopCallback cb([=] { ebm->clearEventBase(); });
 
-   std::cout << "thread: " << idx << std::endl;
+   printf("thread: %u starting\n", manager->idx);
 
    ebm->setEventBase(manager->evb, false);
 
@@ -62,18 +67,10 @@ manager_func(FiberManagerThread *manager,
 
    manager->evb->loopForever();
 
-   EventBase::StackFunctionLoopCallback cb([=] { ebm->clearEventBase(); });
-
    manager->evb->runOnDestruction(&cb);
    manager->stop->wait();
 
-   delete manager->evb;
-   delete manager->stop;
-
-   manager->evb  = nullptr;
-   manager->stop = nullptr;
-
-   std::cout << "thread: " << idx << " gone." << std::endl;
+   printf("thread: %u exiting\n", manager->idx);
 }
 
 
@@ -82,48 +79,43 @@ fiber_init()
 {
    uint32_t num_cpus = get_num_cpus();
 
-   std::cout << "init: " << num_cpus << " threads" <<  std::endl;
+   printf("fiber_init: %u threads\n", num_cpus);
+   state.num_managers = num_cpus;
 
    for (auto i = 0; i < num_cpus; i++) {
-      auto manager = new FiberManagerThread;
+      auto manager = new fiber_mgr;
 
       manager->stop = new folly::Baton<>();
-      manager->evb = new EventBase();
-      manager->th = std::thread(manager_func, manager, i);
+      manager->evb  = new EventBase();
+      manager->idx  = i;
+      manager->th   = std::thread(manager_func, manager);
 
       state.managers.push_back(manager);
    }
 
-   std::cout << "all threads created." << std::endl;
-
-   for (auto i = 0; i < num_cpus; i++) {
-      state.managers[i]->evb->waitUntilRunning();
+   for (auto&& manager : state.managers) {
+      manager->evb->waitUntilRunning();
    }
-   std::cout << "all threads settled." << std::endl;
-
+   printf("fiber_init: ready.\n");
 }
 
 static void
 fiber_exit()
 {
-   std::cout << "stopping all threads." << std::endl;
+   printf("fiber_exit: stopping all threads.\n");
 
-   for (auto i = 0; i < state.num_cpus; i++) {
-      auto manager = state.managers[i];
-
+   for (auto&& manager : state.managers) {
       manager->evb->terminateLoopSoon();
       manager->stop->post();
       manager->th.join();
 
-      assert(manager->evb == nullptr);
-      assert(manager->stop == nullptr);
-
+      delete manager->evb;
+      delete manager->stop;
       delete manager;
    }
    state.managers.clear();
 
-   std::cout << "all threads stopped." << std::endl;
-   std::cout << "done." << std::endl;
+   printf("fiber_exit: done.\n");
 }
 
 
@@ -137,9 +129,7 @@ main(int argc, char* argv[])
 
    fiber_init();
 
-   /*
-    * do something here.
-    */
-
    fiber_exit();
+
+   return 0;
 }
