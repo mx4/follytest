@@ -13,7 +13,7 @@ int main(int argc, char* argv[])
    EventBase evb;
    fibers::Baton b1;
    fibers::Baton b2;
-   const uint64_t numIters = 40 * 1000 * 1000;
+   const uint64_t numIters = 40 * 1000 * 100;
    volatile bool done = false;
 
    init(&argc, &argv);

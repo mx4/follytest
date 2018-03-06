@@ -1,7 +1,7 @@
 OS=$(shell uname -s)
 
-CXX = clang++
-LD  = clang++
+CXX = g++
+LD  = g++
 CXXFLAGS = -std=c++14 -fno-omit-frame-pointer -g -Wall
 
 LIBS_COMMON = -lfolly -lglog
@@ -18,7 +18,7 @@ all : $(BIN)
 $(OBJ): $(SRC)
 
 %: %.o
-	$(LD) $(LDLIBS) -o $@ $<
+	$(LD) -o $@ $< $(LDLIBS)
 
 .cpp.o:
 	$(CXX) $(CXXFLAGS) -c $<

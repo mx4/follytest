@@ -9,7 +9,6 @@
 #include <folly/init/Init.h>
 
 #include <folly/Function.h>
-#include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/io/async/EventBaseManager.h>
 
 
@@ -56,16 +55,17 @@ get_num_cpus()
 static void
 manager_func(fiber_mgr *manager)
 {
-   auto ebm = EventBaseManager::get();
-   EventBase::StackFunctionLoopCallback cb([=] { ebm->clearEventBase(); });
+   // optional
+   if (1) {
+      auto ebm = EventBaseManager::get();
+      EventBase::StackFunctionLoopCallback cb([=] { ebm->clearEventBase(); });
+      ebm->setEventBase(manager->evb, false);
+      manager->evb->runOnDestruction(&cb);
+   }
 
    printf("thread: %u starting\n", manager->idx);
 
-   ebm->setEventBase(manager->evb, false);
-
    manager->evb->loopForever();
-
-   manager->evb->runOnDestruction(&cb);
    manager->stop->wait();
 
    printf("thread: %u exiting\n", manager->idx);
@@ -80,7 +80,7 @@ fiber_init()
    printf("fiber_init: %u threads\n", num_cpus);
    state.num_managers = num_cpus;
 
-   for (auto i = 0; i < num_cpus; i++) {
+   for (uint32_t i = 0; i < num_cpus; i++) {
       auto manager = new fiber_mgr;
 
       manager->stop = new Baton<>();
