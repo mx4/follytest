@@ -7,7 +7,7 @@
 static uint64_t work_func(const std::string& s)
 {
    uint64_t sum = 0;
-   for (auto i = 0; i < s.size(); i++) {
+   for (size_t i = 0; i < s.size(); i++) {
       sum += s[i];
    }
    return sum;

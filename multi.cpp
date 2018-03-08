@@ -1,140 +1,122 @@
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
+
 #include <thread>
-#include <vector>
 #include <sstream>
-#include <cassert>
-#include <iostream>
 
-#include <folly/fibers/Fiber.h>
-#include <folly/fibers/FiberManagerMap.h>
-#include <folly/init/Init.h>
+#include <folly/Memory.h>
 
-#include <folly/Function.h>
-#include <folly/io/async/EventBaseManager.h>
+#include "follib.h"
 
-
-using namespace folly;
-
-struct fiber_mgr {
-   EventBase   *evb;
-   Baton<>     *stop;
-   std::thread  th;
-   uint32_t     idx;
-};
-
-struct fiber_state {
-   uint32_t                 num_managers{0};
-   std::vector<fiber_mgr *> managers;
-};
-
-static struct fiber_state state;
+#define PAGE_SIZE 4096
 
 
 /*
- * The function invoked in the context of a fiber.
+ * Test state.
  */
-static void
-fiber_func(void)
-{
-   std::ostringstream ss;
+static struct {
+   const char *fileName{"/tmp/multi.dat"};
+   int         fileFd{-1};
+   size_t      fileSize{1024 * 1024};
 
-   ss << std::this_thread::get_id();
-   printf("fiber running in thread: %s\n", ss.str().c_str());
-}
-
-
-static uint32_t
-get_num_cpus()
-{
-   return std::thread::hardware_concurrency();
-}
-
-
-/*
- * Each thread function.
- */
-static void
-manager_func(fiber_mgr *manager)
-{
-   // optional
-   if (1) {
-      auto ebm = EventBaseManager::get();
-      EventBase::StackFunctionLoopCallback cb([=] { ebm->clearEventBase(); });
-      ebm->setEventBase(manager->evb, false);
-      manager->evb->runOnDestruction(&cb);
-   }
-
-   printf("thread: %u starting\n", manager->idx);
-
-   manager->evb->loopForever();
-   manager->stop->wait();
-
-   printf("thread: %u exiting\n", manager->idx);
-}
+   ssize_t     allocSize{64 * 1024};
+   size_t      ioSize{4 * 1024};
+   uint32_t    numTotalIOs{4 * 1024};
+} testState;
 
 
 static void
-fiber_init()
+test_prepare_file()
 {
-   uint32_t num_cpus = get_num_cpus();
+   const ssize_t allocSize = testState.allocSize;
+   uint8_t *buf;
+   int fd;
 
-   printf("fiber_init: %u threads\n", num_cpus);
-   state.num_managers = num_cpus;
-
-   for (uint32_t i = 0; i < num_cpus; i++) {
-      auto manager = new fiber_mgr;
-
-      manager->stop = new Baton<>();
-      manager->evb  = new EventBase();
-      manager->idx  = i;
-      manager->th   = std::thread(manager_func, manager);
-
-      state.managers.push_back(manager);
+   printf("preparing file '%s'.\n", testState.fileName);
+   fd = ::open(testState.fileName, O_RDWR | O_CREAT | O_DIRECT, 0755);
+   if (fd < 0) {
+      printf("failed to open file: %s\n", strerror(errno));
+      goto error;
    }
 
-   for (auto&& manager : state.managers) {
-      manager->evb->waitUntilRunning();
+   buf = (uint8_t *)folly::aligned_malloc(allocSize, PAGE_SIZE);
+   assert(buf);
+
+   for (uint32_t i = 0; i < testState.fileSize / allocSize; i++) {
+      memset(buf, (uint8_t)i, allocSize);
+      auto res = pwrite(fd, buf, allocSize, i * allocSize);
+      if (res != allocSize) {
+         printf("failed to write: %zu\n", res);
+         goto error;
+      }
    }
-   printf("fiber_init: ready.\n");
+   testState.fileFd = fd;
+   folly::aligned_free(buf);
+   return;
+error:
+   exit(1);
 }
+
 
 static void
-fiber_exit()
+test_close_file()
 {
-   printf("fiber_exit: stopping all threads.\n");
-
-   for (auto&& manager : state.managers) {
-      manager->evb->terminateLoopSoon();
-      manager->stop->post();
-      manager->th.join();
-
-      delete manager->evb;
-      delete manager->stop;
-      delete manager;
+   if (testState.fileFd < 0) {
+      return;
    }
-   state.managers.clear();
-
-   printf("fiber_exit: done.\n");
+   printf("closing file.\n");
+   ::close(testState.fileFd);
+   testState.fileFd = -1;
 }
+
 
 static void
-fiber_run_in_each_manager()
+fiber_test_func()
 {
-   for (auto&& manager : state.managers) {
-      fibers::getFiberManager(*manager->evb).addTaskRemote(fiber_func);
+   assert(testState.fileFd > 0);
+
+   for (uint32_t i = 0; i < testState.numTotalIOs; i++) {
+      uint8_t *buf = (uint8_t *)folly::aligned_malloc(testState.ioSize, PAGE_SIZE);
+      uint32_t off;
+      bool res;
+
+      off = i * testState.ioSize;
+      if (off + testState.ioSize > testState.fileSize) {
+         off = 0;
+      }
+
+      res = follib_pread(testState.fileFd, off, testState.ioSize, buf);
+      assert(res);
+
+      folly::aligned_free(buf);
    }
+   printf("fiber done.\n");
 }
 
-/*
- * Entry point.
- */
+
+static void
+test_run_func_in_each_manager()
+{
+   printf("running work fibers.\n");
+
+   follib_run_in_all_managers(fiber_test_func);
+}
+
+
 int
 main(int argc, char* argv[])
 {
-   init(&argc, &argv);
+   follib_init();
 
-   fiber_init();
-   fiber_run_in_each_manager();
-   fiber_exit();
+   test_prepare_file();
+   test_run_func_in_each_manager();
+
+   follib_exit();
+
+   test_close_file();
 
    return 0;
 }

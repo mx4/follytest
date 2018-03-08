@@ -1,32 +1,29 @@
-#include <thread>
 #include <chrono>
-#include <iostream>
 
 #include <folly/fibers/Fiber.h>
-#include <folly/fibers/FiberManagerMap.h>
-#include <folly/init/Init.h>
+#include <folly/fibers/FiberManager.h>
+#include <folly/fibers/SimpleLoopController.h>
 
-using namespace folly;
+using namespace folly::fibers;
 
 int main(int argc, char* argv[])
 {
-   EventBase evb;
-   fibers::Baton b1;
-   fibers::Baton b2;
-   const uint64_t numIters = 40 * 1000 * 100;
+   const uint64_t numIters = 30 * 1000 * 100;
    volatile bool done = false;
+   Baton b1;
+   Baton b2;
 
-   init(&argc, &argv);
+   FiberManager manager(std::make_unique<SimpleLoopController>());
+   auto& loopController =
+      dynamic_cast<SimpleLoopController&>(manager.loopController());
 
-   std::cout << "starting.." << std::endl;
-   auto t0 = std::chrono::steady_clock::now();
-   fibers::getFiberManager(evb).addTask([&]() {
+   auto fib1 = [&] {
       while (!done) {
          b2.post();
          b1.wait();
       }
-   });
-   fibers::getFiberManager(evb).addTask([&]() {
+   };
+   auto fib2 = [&] {
       uint64_t n = 0;
       while (n < numIters) {
          b2.wait();
@@ -34,16 +31,25 @@ int main(int argc, char* argv[])
          n++;
       }
       done = true;
-   });
+      loopController.stop();
+   };
 
-   evb.loop();
+   auto loopFunc = [&]() {
+      manager.addTask(fib1);
+      manager.addTask(fib2);
+   };
+
+   auto t0 = std::chrono::steady_clock::now();
+
+   loopController.loop(loopFunc);
 
    auto elapsed = std::chrono::steady_clock::now() - t0;
    auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
    auto latency = elapsed / numIters / std::chrono::nanoseconds(1) * 1.0;
 
-   std::cout << "done in " << millis << " msec" << std::endl;
-   std::cout << "~ " << latency << " nsec / switch" << std::endl;
+   printf("done in %ld msec\n"
+          "latency: ~%.1f nsec/switch\n",
+          millis, latency);
 
    return 0;
 }
