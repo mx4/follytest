@@ -12,14 +12,12 @@ LDLIBS = $(LIBS_COMMON) $(LIBS_$(OS))
 
 SRC = $(shell find . -name "*.cpp")
 OBJ = $(SRC:.cpp=.o)
-BIN = $(OBJ:.o=)
+BIN = multi
 
 all : $(BIN)
-multi: multi.o follib.o
-$(OBJ): $(SRC)
 
-%: %.o
-	$(LD) -o $@ $< follib.o $(LDLIBS)
+multi: $(OBJ)
+	$(LD) -o $@ $(OBJ) $(LDLIBS)
 
 .cpp.o:
 	$(CXX) $(CXXFLAGS) -c $<
