@@ -16,7 +16,7 @@ BIN = multi
 
 all : $(BIN)
 
-multi: $(OBJ)
+$(BIN): $(OBJ)
 	$(LD) -o $@ $(OBJ) $(LDLIBS)
 
 .cpp.o:
