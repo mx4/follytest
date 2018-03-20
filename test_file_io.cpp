@@ -99,10 +99,12 @@ fiber_test_func()
       }
       res = follib_prw(isRead, testState.fileFd, off, ioSize, buf);
       assert(res);
+      (void) res;
 
       folly::aligned_free(buf);
    }
-   printf("fiber done.\n");
+   fiber_mgr *mgr = follib_get_mgr();
+   printf("%u: fiber done.\n", mgr->idx);
 }
 
 
@@ -122,9 +124,14 @@ test_file_io()
    follib_init();
 
    test_prepare_file();
+
    test_run_func_in_each_manager();
 
-   follib_exit();
+   follib_run_loop_until_no_ready();
+
+   follib_quiesce();
 
    test_close_file();
+
+   follib_exit();
 }

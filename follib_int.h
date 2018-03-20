@@ -1,13 +1,40 @@
 #include <cstdint> // uint32_t
+#include <thread>
 
 #pragma once
+
+#include <folly/fibers/Fiber.h>
+#include <folly/fibers/FiberManager.h>
+#include <folly/experimental/io/AsyncIO.h>
+#include <folly/io/async/EventBaseManager.h>
+
+struct AIOEventHandler;
+
+class FollibReadCBs;
+
+/*
+ * The state of per-thread fiber manager.
+ */
+struct fiber_mgr {
+   folly::fibers::FiberManager *manager{nullptr};
+   folly::EventBase             evb;
+   folly::fibers::Baton         baton;
+   std::thread                 *th{nullptr};
+   uint32_t                     idx;
+
+   folly::AsyncIOOp    asyncOp;
+   folly::AsyncIO     *asyncIO{nullptr};
+   int                 asyncIOFd{-1};
+   AIOEventHandler    *aioEventHandler{nullptr};
+   FollibReadCBs      *readCB{nullptr};
+};
+
 
 void Log(const char *fmt, ...);
 
 extern uint32_t logLevel;
 
-struct fiber_mgr;
-extern thread_local fiber_mgr *threadLocalMgr;
+fiber_mgr *follib_get_mgr();
 
 
 #define FLOG(_lvl, _fmt, ...)    \
