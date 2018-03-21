@@ -93,7 +93,7 @@ follib_stop_test()
 fiber_mgr *
 follib_get_mgr()
 {
-   assert(threadLocalMgr);
+   DCHECK_NOTNULL(threadLocalMgr);
    return threadLocalMgr;
 }
 
@@ -174,7 +174,6 @@ follib_thread_func(fiber_mgr *mgr)
 {
    char threadName[16];
 
-   assert(threadLocalMgr == nullptr);
    threadLocalMgr = mgr;
 
    snprintf(threadName, sizeof threadName, "follib-mgr-%u", mgr->idx);
@@ -222,7 +221,7 @@ follib_init()
       mgr->aioEventHandler->registerHandler(EventHandler::READ |
                                             EventHandler::PERSIST);
       if (i == 0) {
-         assert(!mgr->th);
+         DCHECK(!mgr->th);
          threadLocalMgr = mgr;
          libState.sigHandler = new SignalEventHandler(&mgr->evb);
          libState.sigHandler->registerSignalHandler(SIGINT);
@@ -276,7 +275,9 @@ follib_exit()
     * consists in having each thread tear down the part of the infrastructure
     * they use.
     */
-   for (auto&& mgr : libState.managers) {
+   while (!libState.managers.empty()) {
+      auto mgr = libState.managers.back();
+      libState.managers.pop_back();
       if (mgr->idx != 0) {
          mgr->evb.terminateLoopSoon();
          if (mgr->th) {
@@ -291,6 +292,7 @@ follib_exit()
       delete mgr;
    }
    libState.managers.clear();
+   libState.needExit = false;
 
    Log("%s: done.\n", __func__);
 }
