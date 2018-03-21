@@ -6,11 +6,11 @@
 int
 main(int argc, char* argv[])
 {
-//   test_file_io();
+   test_file_io();
 
 //   test_net_server();
 
-   test_server();
+//   test_server();
 
    return 0;
 }

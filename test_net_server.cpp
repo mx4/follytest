@@ -11,6 +11,7 @@ using namespace folly;
 using namespace folly::fibers;
 
 
+#if 0
 class FollibReadCBs : public folly::AsyncReader::ReadCallback {
 public:
    explicit FollibReadCBs(void *ptr,
@@ -288,6 +289,7 @@ test_net_delete_server(TestServer& server,
    evb->runInEventBaseThreadAndWait(deleteServerFunc);
    printf("-- %s:%u\n", __func__, __LINE__);
 }
+#endif
 
 
 void
@@ -297,6 +299,7 @@ test_net_server()
 
    follib_init();
 
+#if 0
    {
       TestServer srvr;
 
@@ -305,6 +308,7 @@ test_net_server()
       sleep(15);
       test_net_delete_server(srvr, 0);
    }
+#endif
 
    follib_exit();
 }

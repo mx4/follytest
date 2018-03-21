@@ -10,23 +10,18 @@
 
 struct AIOEventHandler;
 
-class FollibReadCBs;
-
 /*
  * The state of per-thread fiber manager.
  */
 struct fiber_mgr {
-   folly::fibers::FiberManager *manager{nullptr};
-   folly::EventBase             evb;
-   folly::fibers::Baton         baton;
-   std::thread                 *th{nullptr};
-   uint32_t                     idx;
+   std::unique_ptr<folly::fibers::FiberManager> manager;
+   folly::EventBase                             evb;
+   folly::fibers::Baton                         baton;
+   std::unique_ptr<std::thread>                 th;
+   uint32_t                                     idx{0};
 
-   folly::AsyncIOOp    asyncOp;
-   folly::AsyncIO     *asyncIO{nullptr};
-   int                 asyncIOFd{-1};
-   AIOEventHandler    *aioEventHandler{nullptr};
-   FollibReadCBs      *readCB{nullptr};
+   std::unique_ptr<folly::AsyncIO>   asyncIO;
+   std::unique_ptr<AIOEventHandler>  aioEventHandler;
 };
 
 

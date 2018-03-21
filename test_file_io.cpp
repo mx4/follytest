@@ -1,6 +1,3 @@
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
 #include <stdlib.h>
@@ -77,16 +74,23 @@ test_close_file()
 
 
 static void
-fiber_test_func()
+fiber_test_func(int fibIdx)
 {
    assert(testState.fileFd > 0);
 
    for (uint32_t i = 0; i < testState.numTotalIOs; i++) {
       uint32_t j = rand() + i;
       size_t ioSize = testState.ioSize * ((j % 4) + 1);
-      uint8_t *buf = (uint8_t *)folly::aligned_malloc(ioSize, PAGE_SIZE);
+      uint8_t *buf;
       uint32_t off;
       bool res;
+
+      if (follib_need_exit()) {
+         printf("thread %u: fiber %d interrupted.\n", follib_get_mgr_idx(), fibIdx);
+         return;
+      }
+
+      buf = (uint8_t *)folly::aligned_malloc(ioSize, PAGE_SIZE);
 
       off = (rand() * 1024) % testState.fileSize;
       if (off + ioSize > testState.fileSize) {
@@ -103,17 +107,18 @@ fiber_test_func()
 
       folly::aligned_free(buf);
    }
-   fiber_mgr *mgr = follib_get_mgr();
-   printf("%u: fiber done.\n", mgr->idx);
+   printf("thread %u: fiber %d done.\n", follib_get_mgr_idx(), fibIdx);
 }
 
 
 static void
-test_run_func_in_each_manager()
+test_run_func_in_each_manager(uint32_t numFibs)
 {
-   printf("running work fibers.\n");
+   printf("launching %u fibers.\n", numFibs);
 
-   follib_run_in_all_managers(fiber_test_func);
+   for (uint32_t i = 0; i < numFibs; i++) {
+      follib_run_in_all_managers([i]() { fiber_test_func(i); });
+   }
 }
 
 
@@ -125,7 +130,7 @@ test_file_io()
 
    test_prepare_file();
 
-   test_run_func_in_each_manager();
+   test_run_func_in_each_manager(10);
 
    follib_run_loop_until_no_ready();
 

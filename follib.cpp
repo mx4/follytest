@@ -16,13 +16,12 @@
 
 #include "follib.h"
 #include "follib_int.h"
+#include "follib_io.h"
 
 using namespace folly::fibers;
 
 using folly::EventBase;
 using folly::EventHandler;
-using folly::AsyncIO;
-using folly::AsyncIOOp;
 
 uint32_t logLevel = 2;
 
@@ -30,12 +29,13 @@ uint32_t logLevel = 2;
 static thread_local fiber_mgr *threadLocalMgr;
 
 class SignalEventHandler : public folly::AsyncSignalHandler {
-   using AsyncSignalHandler::AsyncSignalHandler;
+public:
+   SignalEventHandler(folly::EventBase *evb) : folly::AsyncSignalHandler(evb) {}
    void signalReceived(int sig) noexcept override {
       fiber_mgr *mgr = threadLocalMgr;
 
       printf("%u: got signal %u\n", mgr->idx, sig);
-      assert(mgr->idx == 0);
+      DCHECK_EQ(mgr->idx, 0);
       follib_stop_test();
    }
 };
@@ -53,9 +53,7 @@ struct AIOEventHandler : public EventHandler {
       DCHECK_EQ(events, EventHandler::READ);
 
       auto completedOps = mgr->asyncIO->pollCompleted();
-      DCHECK_EQ(completedOps.size(), 1);
-
-      mgr->baton.post();
+      DCHECK_GE(completedOps.size(), 1);
    }
 };
 
@@ -63,8 +61,15 @@ struct AIOEventHandler : public EventHandler {
 static struct {
    SignalEventHandler      *sigHandler;
    std::vector<fiber_mgr *> managers;
+   bool                     needExit{false};
 } libState;
 
+
+bool
+follib_need_exit()
+{
+   return libState.needExit;
+}
 
 uint32_t
 follib_get_num_managers()
@@ -77,6 +82,7 @@ follib_stop_test()
 {
    auto evb = follib_get_evb(0);
 
+   libState.needExit = true;
    /*
     * this function is ok to call from any thread as per the doc.
     */
@@ -167,10 +173,10 @@ static void
 follib_thread_func(fiber_mgr *mgr)
 {
    char threadName[16];
-   DCHECK_NE(mgr->asyncIOFd, -1);
-   DCHECK(threadLocalMgr == nullptr);
 
+   assert(threadLocalMgr == nullptr);
    threadLocalMgr = mgr;
+
    snprintf(threadName, sizeof threadName, "follib-mgr-%u", mgr->idx);
    mgr->evb.setName(threadName);
 
@@ -204,14 +210,14 @@ follib_init()
       auto mgr = new fiber_mgr;
 
       mgr->evb.setName("");
-      mgr->manager = new FiberManager(std::make_unique<EventBaseLoopController>(),
-                                      options);
+      mgr->manager = std::make_unique<FiberManager>(std::make_unique<EventBaseLoopController>(),
+                                                    options);
       dynamic_cast<EventBaseLoopController&>(mgr->manager->loopController())
                .attachEventBase(mgr->evb);
       mgr->idx = i;
-      mgr->asyncIO = new AsyncIO(numMaxAsyncIO, AsyncIO::POLLABLE);
-      mgr->asyncIOFd = mgr->asyncIO->pollFd();
-      mgr->aioEventHandler = new AIOEventHandler(&mgr->evb, mgr->asyncIOFd);
+      mgr->asyncIO = std::make_unique<folly::AsyncIO>(numMaxAsyncIO, folly::AsyncIO::POLLABLE);
+      mgr->aioEventHandler = std::make_unique<AIOEventHandler>(&mgr->evb,
+                                                               mgr->asyncIO->pollFd());
 
       mgr->aioEventHandler->registerHandler(EventHandler::READ |
                                             EventHandler::PERSIST);
@@ -221,14 +227,13 @@ follib_init()
          libState.sigHandler = new SignalEventHandler(&mgr->evb);
          libState.sigHandler->registerSignalHandler(SIGINT);
       } else {
-         mgr->th = new std::thread(follib_thread_func, mgr);
+         mgr->th = std::make_unique<std::thread>(follib_thread_func, mgr);
          // wait til the poll loop is running in the new thread
          mgr->evb.waitUntilRunning();
       }
 
       libState.managers.push_back(mgr);
    }
-
 
    FLOG(1, "%s: ready.\n", __func__);
 }
@@ -250,8 +255,7 @@ follib_quiesce()
       }
       mgr->evb.terminateLoopSoon();
       mgr->th->join();
-      delete mgr->th;
-      mgr->th = nullptr;
+      mgr->th.reset();
    }
 }
 
@@ -280,14 +284,6 @@ follib_exit()
          }
       }
 
-      delete mgr->th;
-      mgr->th = nullptr;
-      delete mgr->manager;
-      mgr->manager = nullptr;
-      delete mgr->asyncIO;
-      mgr->asyncIO = nullptr;
-      delete mgr->aioEventHandler;
-      mgr->aioEventHandler = nullptr;
       if (mgr->idx == 0) {
          delete libState.sigHandler;
          libState.sigHandler = nullptr;
@@ -300,26 +296,21 @@ follib_exit()
 }
 
 
-/*
- * follib_run_in_all_managers --
- *
- *      Routine used to run a fiber in all the threads.
- */
-void
-follib_run_in_all_managers(FiberFunc *func)
-{
-   for (auto&& mgr : libState.managers) {
-      mgr->manager->addTaskRemote(func);
-   }
-}
-
-
 FiberManager *
 follib_get_manager(int idx)
 {
    if (idx == -1) {
       auto mgr = follib_get_mgr();
-      return mgr->manager;
+      return mgr->manager.get();
    }
-   return libState.managers.at(idx)->manager;
+   return libState.managers.at(idx)->manager.get();
+}
+
+
+uint32_t
+follib_get_mgr_idx()
+{
+   const auto mgr = follib_get_mgr();
+
+   return mgr->idx;
 }

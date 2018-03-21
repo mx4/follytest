@@ -142,9 +142,9 @@ TestConn::~TestConn()
 {
    assert(exit_);
 
-   auto mgr = follib_get_mgr();
    destroyed_ = true;
-   printf("%u: deleting connection w/ fd=%d\n", mgr->idx, sock_->getFd());
+   printf("%u: deleting connection w/ fd=%d\n",
+          follib_get_mgr_idx(), sock_->getFd());
    sock_.reset();
 }
 
@@ -188,15 +188,17 @@ TestConn::DoWorkFunc()
          }
 
          IOBuf *buf = &*todoBuf_;
+         const IOBuf *buf0 = buf;
          do {
             auto s = buf->moveToFbString();
-            auto isEOLFunc = [](char x){ return x == '\n' || x == '\r'; };
+            const auto isEOLFunc = [](char x){ return x == '\n' || x == '\r'; };
             s.erase(std::remove_if(s.begin(), s.end(), isEOLFunc), s.end());
 
             printf("-- '%s'\n", s.c_str());
 
             buf = buf->next();
-         } while (buf != &*todoBuf_);
+         } while (buf != buf0);
+         todoBuf_.reset();
       }
    }
 }
@@ -205,15 +207,14 @@ TestConn::DoWorkFunc()
 void
 TestConn::InitOnEventBase(int fd)
 {
-   auto mgr = follib_get_mgr();
-
-   printf("%u: initing  connection w/ fd=%d\n", mgr->idx, fd);
+   printf("%u: initing  connection w/ fd=%d\n", follib_get_mgr_idx(), fd);
    sock_ = AsyncSocket::newSocket(follib_get_evb(), fd);
    sock_->setReadCB(this);
 
    std::weak_ptr<TestConn> connWeak = GetSharedPtr();
 
-   mgr->manager->addTask([connWeak]() {
+   auto mgr = follib_get_manager();
+   mgr->addTask([connWeak]() {
       if (auto c = connWeak.lock()) {
          c->DoWorkFunc();
       }
@@ -273,11 +274,11 @@ int
 TestServer::InitOnEventBase(const std::string& addrStr,
                             uint16_t           port)
 {
-   auto mgr = follib_get_mgr();
    auto evb = follib_get_evb();
-
    auto addr = SocketAddress(addrStr, port);
-   printf("%u: init server at %s:%u\n", mgr->idx, addrStr.c_str(), port);
+
+   printf("%u: init server at %s:%u\n",
+          follib_get_mgr_idx(), addrStr.c_str(), port);
 
    acceptSock_ = AsyncServerSocket::newSocket(evb);
 
@@ -338,9 +339,7 @@ TestServer::StartAccept(const char *addrStr,
 void
 TestServer::ExitOnEventBase()
 {
-   auto mgr = follib_get_mgr();
-
-   printf("%u: stopping server on event base\n", mgr->idx);
+   printf("%u: stopping server on event base\n", follib_get_mgr_idx());
 
    acceptSock_->removeAcceptCallback(this, follib_get_evb());
    acceptSock_.reset();
