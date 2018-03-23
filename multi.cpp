@@ -12,9 +12,9 @@ main(int argc, char* argv[])
 
 //   test_file_io();
 
-//   test_net_server();
+   test_net_server();
 
-   test_server();
+//   test_server();
 
    follib_log_exit();
 

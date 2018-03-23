@@ -25,17 +25,5 @@ struct fiber_mgr {
 };
 
 
-void Log(const char *fmt, ...);
-
-extern uint32_t logLevel;
-
 fiber_mgr *follib_get_mgr();
-
-
-#define FLOG(_lvl, _fmt, ...)    \
-   do {                          \
-      if (_lvl <= logLevel) {    \
-         Log(_fmt, __VA_ARGS__); \
-      }                          \
-   } while (0)
 

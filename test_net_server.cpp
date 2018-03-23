@@ -1,295 +1,500 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include <map>
+
+#include <folly/fibers/Fiber.h>
+#include <folly/fibers/FiberManager.h>
+
 #include <folly/io/async/AsyncSocket.h>
 #include <folly/io/async/AsyncServerSocket.h>
-#include <folly/fibers/Baton.h>
+#include <folly/experimental/io/AsyncIO.h>
 
 #include "follib.h"
+#include "test_net_server.h"
 
 using namespace folly;
-using namespace folly::fibers;
 
+typedef void* (FiberRunFunc)(void*);
 
-#if 0
-class FollibReadCBs : public folly::AsyncReader::ReadCallback {
+class Fib {
 public:
-   explicit FollibReadCBs(void *ptr,
-                          size_t l) : buf(ptr), bufSize(l) { }
+   void Wait() {
+      printf("-- %s:%u\n", __func__, __LINE__);
 
-   ~FollibReadCBs() override { }
-   void getReadBuffer(void **bufPtr, size_t *lenPtr) override {
-      *bufPtr = buf;
-      *lenPtr = bufSize;
-      printf("-- %s:%u\n", __func__, __LINE__);
-   }
-   void readDataAvailable(size_t readLen) noexcept override {
-      fiber_mgr *mgr = follib_get_mgr();
-      printf("-- %s:%u\n", __func__, __LINE__);
-      len = readLen;
-      buf = nullptr;
-      if (mgr->readCB) {
-         mgr->baton.post();
-      }
-      printf("-- %s:%u\n", __func__, __LINE__);
-   }
-   void readEOF() noexcept override {
-      fiber_mgr *mgr = follib_get_mgr();
-      printf("-- %s:%u\n", __func__, __LINE__);
-      if (mgr->readCB) {
-         mgr->baton.post();
-      }
-      printf("-- %s:%u\n", __func__, __LINE__);
-   }
-   void readErr(const AsyncSocketException& except) noexcept override {
-      fiber_mgr *mgr = follib_get_mgr();
-      printf("-- %s:%u\n", __func__, __LINE__);
-      len = -1;
-      if (mgr->readCB) {
-         mgr->baton.post();
-      }
-      printf("-- %s:%u\n", __func__, __LINE__);
-   }
-
-   ssize_t   len{0};
-   void     *buf{nullptr};
-   size_t    bufSize{0};
-};
-
-
-class FollibServerAcceptCBs : public AsyncServerSocket::AcceptCallback {
-public:
-   FollibServerAcceptCBs() { }
-
-   void setConnectionAcceptedFn(const std::function<void(int, const SocketAddress&)>& fn) {
-      connectionAcceptedFn_ = fn;
-   }
-   void setAcceptErrorFn(const std::function<void(const std::exception&)>& fn) {
-      acceptErrorFn_ = fn;
-   }
-   void setAcceptStartedFn(const std::function<void()>& fn) {
-      acceptStartedFn_ = fn;
-   }
-   void setAcceptStoppedFn(const std::function<void()>& fn) {
-      acceptStoppedFn_ = fn;
-   }
-
-   void connectionAccepted(int fd,
-                           const SocketAddress& addr) noexcept override {
-      if (connectionAcceptedFn_) {
-         connectionAcceptedFn_(fd, addr);
+      if (folly::fibers::onFiber()) {
+         baton_.wait();
+      } else {
+         while (!baton_.try_wait()) {
+            follib_run_loop_once(); // XXX
+         }
       }
    }
-   void acceptError(const std::exception& ex) noexcept override {
-      if (acceptErrorFn_) {
-         acceptErrorFn_(ex);
-      }
+   void Complete(void *res) {
+      printf("-- %s:%u\n", __func__, __LINE__);
+      result_ = res;
+      baton_.post();
    }
-   void acceptStarted() noexcept override {
-      if (acceptStartedFn_) {
-         acceptStartedFn_();
-      }
-   }
-   void acceptStopped() noexcept override {
-      if (acceptStoppedFn_) {
-         acceptStoppedFn_();
-      }
-   }
+   void *GetResult() { return result_; }
 
 private:
-   std::function<void(int, const folly::SocketAddress&)> connectionAcceptedFn_;
-   std::function<void(const std::exception&)> acceptErrorFn_;
-   std::function<void()> acceptStartedFn_;
-   std::function<void()> acceptStoppedFn_;
+   folly::fibers::Baton baton_;
+   void                *result_{nullptr};
 };
 
 
-class TestConn {
+class TestNetReadCB : public folly::AsyncReader::ReadCallback {
 public:
-   TestConn() {
-      printf("-- %s:%u\n", __func__, __LINE__);
+   TestNetReadCB(void *buf, uint64_t len) {
+      ioBuf_ = IOBuf::takeOwnership(buf, len, (uint64_t)0,
+                                    [](void *buf, void *user) { /* wheee */ });
+      DCHECK_EQ(ioBuf_->writableData(), buf);
+      DCHECK_EQ(ioBuf_->tailroom(), len);
    }
-   ~TestConn() {
-      printf("-- %s:%u\n", __func__, __LINE__);
+   void getReadBuffer(void  **bufPtr,
+                      size_t *lenPtr) override {
+      *bufPtr = ioBuf_->writableData();
+      *lenPtr = ioBuf_->tailroom();
+      FLOG(1, "-- %s:%u buf=0x%p len=%zu\n",
+           __func__, __LINE__, *bufPtr, *lenPtr);
    }
-   std::shared_ptr<AsyncSocket> sock;
+   void readDataAvailable(size_t readLen) noexcept override {
+      ioBuf_->append(readLen);
+      FLOG(1, " tailroom / length: %zd / %zd\n",
+           ioBuf_->tailroom(), ioBuf_->length());
+      if (ioBuf_->tailroom() == 0) {
+         Signal();
+      }
+   }
+   void readEOF() noexcept override {
+//      printf("-- %s\n", __func__);
+      eof_ = true;
+      Signal();
+   }
+   void readErr(const AsyncSocketException& ex) noexcept override {
+      FLOG(3, "-- %s: %s\n", __func__, ex.what());
+//      exc_ = ex;
+      Signal();
+      follib_stop_test();
+   }
+
+   void ReadAllData() {
+      baton_.wait();
+      baton_.reset();
+   }
+   size_t ReadLen() const { return ioBuf_->length(); }
+   bool   IsEOF() const { return eof_; }
+   void   Signal() { baton_.post(); }
+
+   bool                   closed_{false};
+
+private:
+   std::unique_ptr<IOBuf> ioBuf_;
+   folly::fibers::Baton   baton_;
+   bool                   eof_{false};
 };
 
-class FollibServerSocket {
+
+class TestNetConn {
 public:
-   std::shared_ptr<AsyncServerSocket>  sock;
-   bool                                done{false};
+   TestNetConn(int fd) : fd_(fd) {}
+   ~TestNetConn() { }
+
+   void Start();
+   void Stop();
+   int  GetFd() const { return fd_; }
+   void Close();
+   void DoWork();
+
+private:
+   std::shared_ptr<AsyncSocket>  sock_;
+   int                           fd_{-1};
+   Fib                          *fib_{nullptr};
 };
 
-struct TestServer {
-   ~TestServer() {
-      printf("-- %s:%u\n", __func__, __LINE__);
+
+
+class TestNetServer {
+public:
+   TestNetServer();
+   ~TestNetServer();
+   int StartAccept(const char *addrStr, uint16_t port, uint32_t threadId);
+   void Exit();
+   void AcceptLoop();
+
+private:
+   int InitOnEventBase(std::string addr, uint16_t port);
+   void ExitOnEventBase();
+
+   Fib                                        *acceptFib_{nullptr};
+   std::shared_ptr<AsyncServerSocket>          acceptSock_;
+   std::map<int, std::shared_ptr<TestNetConn>> connMap_;
+   folly::SharedMutex                          mutex_;
+};
+
+
+
+class TestNetAcceptCB : public AsyncServerSocket::AcceptCallback {
+public:
+   void connectionAccepted(int fd,
+                           const SocketAddress& addr) noexcept override {
+      FLOG(0, "-- %s:%u fd=%d\n", __func__, __LINE__, fd);
+      fd_ = fd;
+      baton_.post();
    }
-   SocketAddress                       addr;
-   std::shared_ptr<AsyncServerSocket>  sock;
-   std::vector<TestConn *>             conns;
-   bool                                done{false};
+   void acceptError(const std::exception& ex) noexcept override {
+      FLOG(0, "-- %s:%u '%s'\n", __func__, __LINE__, ex.what());
+   }
+   void acceptStarted() noexcept override {
+      refCount_++;
+      FLOG(0, "-- %s:%u refCount=%d\n", __func__, __LINE__, refCount_);
+   }
+   void acceptStopped() noexcept override {
+      baton_.post();
+      refCount_--;
+      FLOG(0, "-- %s:%u refCount=%d\n", __func__, __LINE__, refCount_);
+      if (refCount_ == 0) {
+         delete this;
+      }
+   }
+   int getFd() const { return fd_; }
+   void Wait() { baton_.wait(); }
+   void Reset() { baton_.reset(); fd_ = -1; }
+
+   int                  refCount_{0};
+
+private:
+   folly::fibers::Baton baton_;
+   int                  fd_{-1};
 };
 
 
+class TestSock {
+public:
+
+   ssize_t Read(void *buf, size_t bufLen);
+
+private:
+   TestNetReadCB                readCB_;
+   std::shared_ptr<AsyncSocket> sock_;
+};
+
+
+Fib *
+Fiber_Create(FiberRunFunc *func,
+             void         *param)
+{
+   auto mgr = follib_get_manager();
+   Fib *fib;
+
+   fib = new(std::nothrow) Fib();
+
+   FLOG(1, "-- %s:%u func=%p param=%p\n", __func__, __LINE__,
+        (void *)func, param);
+
+   auto fn = [fib, func, param]() {
+      void *res = func(param);
+      fib->Complete(res);
+   };
+
+   mgr->addTask(std::move(fn));
+
+   return fib;
+}
 
 
 int
-follib_net_accept(std::shared_ptr<AsyncServerSocket> sock)
+Fiber_Join(Fib   *fib,
+           void **result)
 {
-   FollibServerAcceptCBs acceptCBs;
-   fiber_mgr *mgr = follib_get_mgr();
-   int fd = -1;
+   printf("-- %s:%u\n", __func__, __LINE__);
+   fib->Wait();
+   printf("-- %s:%u\n", __func__, __LINE__);
 
-   auto acceptFunc = [&](int fdIn, const SocketAddress& addr) {
-      printf("accept: fd=%d\n", fdIn);
+   if (result) {
+      *result = fib->GetResult();
+   }
+   delete fib;
+   return 0;
+}
 
-      fd = fdIn;
-      mgr->baton.post();
 
-      printf("-- conn_accepted %s:%u\n", __func__, __LINE__);
-   };
+int
+Fiber_Accept(std::shared_ptr<AsyncServerSocket> sock)
+{
+   TestNetAcceptCB *acceptObj;
+   auto evb = follib_get_evb();
 
-   auto acceptErrFunc = [=](const std::exception& ex) {
-      printf("-- accept error: %s\n", ex.what());
-      mgr->baton.post();
-   };
+   acceptObj = new TestNetAcceptCB();
 
-   auto acceptStoppedFunc = [=]() {
-      printf("-- accept_stopped %s:%u\n", __func__, __LINE__);
-//      mgr->baton.post();
-   };
-
-   acceptCBs.setConnectionAcceptedFn(acceptFunc);
-   acceptCBs.setAcceptErrorFn(acceptErrFunc);
-   acceptCBs.setAcceptStoppedFn(acceptStoppedFunc);
-//   acceptCBs.setAcceptStartedFn([&]{ printf("accept started.\n"); });
-
-   sock->addAcceptCallback(&acceptCBs, &mgr->evb);
    sock->startAccepting();
+   sock->addAcceptCallback(acceptObj, evb);
+   acceptObj->refCount_++;
 
-   printf("-- %s:%u\n", __func__, __LINE__);
-   mgr->baton.wait();
-   printf("-- %s:%u\n", __func__, __LINE__);
+   acceptObj->Wait();
 
-   sock->stopAccepting();
-//   sock->removeAcceptCallback(&acceptCBs, &mgr->evb);
+   auto fd = acceptObj->getFd();
+   if (sock->getAccepting()) {
+      sock->removeAcceptCallback(acceptObj, evb);
+   }
 
-   mgr->baton.reset();
-
-   printf("%s got fd=%d\n", __func__, fd);
+   acceptObj->refCount_--;
+   if (acceptObj->refCount_ == 0) {
+      delete acceptObj;
+   }
 
    return fd;
 }
 
 
 int
-follib_net_close(std::shared_ptr<AsyncServerSocket> sock)
+Fiber_Close(std::shared_ptr<AsyncServerSocket> sock)
 {
-   fiber_mgr *mgr = follib_get_mgr();
-
-   printf("-- %s:%u\n", __func__, __LINE__);
    if (sock->getAccepting()) {
-      mgr->baton.post();
+      sock->stopAccepting();
    }
    sock.reset();
-   printf("-- %s:%u\n", __func__, __LINE__);
 
    return 0;
 }
 
 
-/*
- * follib_net_read --
- *
- *      Socket read.
- */
 ssize_t
-follib_net_read(std::shared_ptr<AsyncSocket> sock,
-                void                        *buf,
-                size_t                       len)
+Follib_Read(std::shared_ptr<AsyncSocket> sock,
+            void                        *buf,
+            size_t                       len)
 {
-   fiber_mgr *mgr = follib_get_mgr();
-   FollibReadCBs readCB(buf, len);
+   auto readCB = new TestNetReadCB(buf, len);
+   ssize_t res;
 
-   mgr->readCB = &readCB;
+   sock->setReadCB(readCB);
 
-   sock->setReadCB(&readCB);
+   readCB->ReadAllData();
 
-   FLOG(0, "mgr %u: %s: len: %zu\n", mgr->idx, __func__, len);
-
-   mgr->baton.wait();
    sock->setReadCB(nullptr);
 
-   mgr->readCB = nullptr;
+   res = -1;
+   if (!readCB->IsEOF() && !readCB->closed_) {
+      res = readCB->ReadLen();
+   }
 
-   return readCB.len;
+   delete readCB;
+
+   FLOG(2, "Just read %zd bytes.\n", res);
+
+   return res;
 }
 
 
-
-static void
-run_accept_fiber(void *clientData)
+void
+TestNetConn::DoWork()
 {
-   TestServer *server = (TestServer *)clientData;
+   printf("-- %s:%u conn work starting\n", __func__, __LINE__);
 
-   printf("-- %s:%u\n", __func__, __LINE__);
+   while (true) {
+      char buf[33];
+      ssize_t res;
 
-   server->sock = AsyncServerSocket::newSocket(follib_get_evb());
-
-   server->sock->setReusePortEnabled(true);
-   server->sock->bind(server->addr);
-   server->sock->listen(10);
-
-   while (!server->done) {
-      int fd = follib_net_accept(server->sock);
-      if (fd < 0) {
+      buf[32] = '\0';
+      res = Follib_Read(sock_, buf, sizeof buf - 1);
+      if (res < 0) {
          printf("-- %s:%u\n", __func__, __LINE__);
          break;
       }
-      printf("accept got fd=%d\n", fd);
-      close(fd);
+
+      FLOG(1, "Read %zd bytes.\n", res);
+      std::string s(&buf[0]);
+      const auto isEOLFunc = [](char x){ return x == '\n' || x == '\r'; };
+      s.erase(std::remove_if(s.begin(), s.end(), isEOLFunc), s.end());
+
+      printf("-- '%s'\n", s.c_str());
    }
 
-   printf("-- %s:%u\n", __func__, __LINE__);
+   printf("-- %s:%u conn work done\n", __func__, __LINE__);
 }
 
-static void
-test_net_create_server(TestServer& server,
-                       uint32_t    thId)
+
+void
+TestNetConn::Close()
 {
-   server.addr = SocketAddress("127.0.0.1", 1666);
+   if (auto readCB = sock_->getReadCallback()) {
+      TestNetReadCB *cb = dynamic_cast<TestNetReadCB *>(readCB);
 
-   printf("creating server at %s:%u\n",
-          server.addr.getAddressStr().c_str(),
-          server.addr.getPort());
+      printf("%s: signalling end of read.\n", __func__);
+      cb->closed_ = true;
+      cb->Signal();
+   }
 
-   auto fibMgr = follib_get_manager(thId);
-   fibMgr->addTaskRemote([&server]() { run_accept_fiber(&server); });
-
-   printf("-- %s:%u\n", __func__, __LINE__);
+   sock_.reset();
 }
 
 
-static void
-test_net_delete_server(TestServer& server,
-                       uint32_t    thId)
+void *
+TestNetConnReadWrapper(void *clientData)
+{
+   TestNetConn *conn = static_cast<TestNetConn *>(clientData);
+
+   conn->DoWork();
+
+   return nullptr;
+}
+
+
+void
+TestNetConn::Start()
+{
+   fib_ = Fiber_Create(TestNetConnReadWrapper, this);
+
+   printf("%u: initing  connection w/ fd=%d\n", follib_get_mgr_idx(), fd_);
+
+   sock_ = AsyncSocket::newSocket(follib_get_evb(), fd_);
+
+   /*
+    * We only want get read callbacks to read a certain number of bytes. Once
+    * we've read all the data needed we unregister those callbacks. If
+    * maxReadsPerEvent is >1, we may get getReadBuffer callbacks even though
+    * we're done reading. We wouldn't know what to do with the data just read.
+    */
+   sock_->setMaxReadsPerEvent(1);
+
+}
+
+
+void
+TestNetConn::Stop()
+{
+   printf("-- %s:%u stopping connection\n", __func__, __LINE__);
+   Close();
+   if (fib_) {
+      printf("-- %s:%u\n", __func__, __LINE__);
+      Fiber_Join(fib_, nullptr);
+   }
+}
+
+
+void
+TestNetServer::AcceptLoop()
+{
+   printf("-- %s:%u -- accept loop started\n", __func__, __LINE__);
+   while (true) {
+      printf("calling accept..\n");
+      int fd = Fiber_Accept(acceptSock_);
+      printf("accept returns fd=%d\n", fd);
+      if (fd < 0) {
+         break;
+      }
+      auto conn = std::make_shared<TestNetConn>(fd);
+
+      connMap_[fd] = conn;
+      conn->Start();
+   }
+
+   printf("-- %s:%u -- accept loop done\n", __func__, __LINE__);
+}
+
+
+static void *
+AcceptWrapperFunc(void *param)
+{
+   TestNetServer *server = static_cast<TestNetServer *>(param);
+
+   printf("thread %u -- %s:%u\n", follib_get_mgr_idx(), __func__, __LINE__);
+
+   server->AcceptLoop();
+
+   printf("thread %u -- %s:%u\n", follib_get_mgr_idx(), __func__, __LINE__);
+
+   return nullptr;
+}
+
+
+int
+TestNetServer::InitOnEventBase(std::string addrStr,
+                               uint16_t    port)
+{
+   auto addr = SocketAddress(addrStr, port);
+   auto evb = follib_get_evb();
+
+   acceptSock_ = AsyncServerSocket::newSocket(evb);
+
+   acceptSock_->setReusePortEnabled(true);
+   acceptSock_->bind(addr);
+   acceptSock_->listen(10);
+
+   acceptFib_ = Fiber_Create(AcceptWrapperFunc, this);
+
+   return 0;
+}
+
+
+int
+TestNetServer::StartAccept(const char *addrStr,
+                           uint16_t    port,
+                           uint32_t    thId)
 {
    auto evb = follib_get_evb(thId);
+   int err = 0;
 
-   printf("-- %s:%u\n", __func__, __LINE__);
+   printf("%s: init server at %s:%u\n", __func__, addrStr, port);
 
-   server.done = true;
-   auto deleteServerFunc = [&] {
-      printf("-- %s:%u\n", __func__, __LINE__);
-      follib_net_close(server.sock);
-      printf("-- %s:%u\n", __func__, __LINE__);
-   };
+   folly::fibers::Baton baton;
+   evb->runInEventBaseThread([&]() {
+      err = InitOnEventBase(addrStr, port);
+      baton.post();
+   });
 
-   evb->runInEventBaseThreadAndWait(deleteServerFunc);
-   printf("-- %s:%u\n", __func__, __LINE__);
+   baton.wait();
+
+   return err;
 }
-#endif
+
+TestNetServer::TestNetServer()
+{
+   LOG(INFO) << __func__;
+}
+
+TestNetServer::~TestNetServer()
+{
+   LOG(INFO) << __func__;
+}
+
+
+void
+TestNetServer::ExitOnEventBase()
+{
+   Fiber_Close(acceptSock_);
+   if (acceptFib_) {
+      Fiber_Join(acceptFib_, nullptr);
+   }
+
+   for (auto p : connMap_) {
+      auto conn = p.second;
+      FLOG(0, "Closing conn for fd=%d\n", conn->GetFd());
+
+      conn->Stop();
+   }
+
+   acceptSock_.reset();
+}
+
+
+void
+TestNetServer::Exit()
+{
+   printf("stopping accept server\n");
+
+   auto evb = acceptSock_->getEventBase();
+   folly::fibers::Baton baton;
+
+   evb->runInEventBaseThread([&]() {
+      ExitOnEventBase();
+      baton.post();
+   });
+
+   baton.wait();
+
+   printf("server accept stopped\n");
+}
 
 
 void
@@ -299,16 +504,22 @@ test_net_server()
 
    follib_init();
 
-#if 0
    {
-      TestServer srvr;
+      auto server = std::make_shared<TestNetServer>();
 
-      test_net_create_server(srvr, 0);
-      printf("sleeping 15 sec.\n");
-      sleep(15);
-      test_net_delete_server(srvr, 0);
+      auto res = server->StartAccept("127.0.0.1", 1666, 1);
+      if (res != 0) {
+         goto done;
+      }
+
+      printf("Waiting for ctr-c.\n");
+      follib_run_loop(false);
+      printf("Got ctrl-c.\n");
+done:
+      server->Exit();
+
+      follib_run_loop_until_no_ready();
    }
-#endif
 
    follib_exit();
 }

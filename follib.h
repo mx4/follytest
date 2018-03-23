@@ -9,6 +9,7 @@ void follib_exit();
 void follib_quiesce();
 void follib_run_loop(bool waitNoReady=true);
 void follib_run_loop_until_no_ready();
+void follib_run_loop_once();
 void follib_stop_test();
 bool follib_need_exit();
 uint32_t follib_get_num_managers();
@@ -29,3 +30,16 @@ follib_run_in_all_managers(F&& func)
       manager->addTaskRemote(func);
    }
 }
+
+extern uint32_t logLevel;
+
+void Log(const char *fmt, ...);
+
+
+#define FLOG(_lvl, _fmt, ...)    \
+   do {                          \
+      if (_lvl <= logLevel) {    \
+         Log(_fmt, __VA_ARGS__); \
+      }                          \
+   } while (0)
+

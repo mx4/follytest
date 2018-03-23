@@ -135,6 +135,15 @@ Log(const char *fmt,
 
 
 void
+follib_run_loop_once()
+{
+   auto mgr = follib_get_mgr();
+
+   mgr->evb.loopOnce();
+}
+
+
+void
 follib_run_loop_until_no_ready()
 {
    auto mgr = follib_get_mgr();
@@ -142,7 +151,7 @@ follib_run_loop_until_no_ready()
    while (mgr->manager->hasTasks()) {
       mgr->evb.loopOnce();
    }
-   FLOG(1, "thread %u: no ready tasks left.\n", mgr->idx);
+   FLOG(3, "thread: %u no ready tasks left.\n", mgr->idx);
 }
 
 
@@ -153,7 +162,7 @@ follib_run_loop(bool waitNoReady)
 
    mgr->evb.loopForever();
 
-   FLOG(1, "thread: %u exited loopForever (hasTasks: %u)\n",
+   FLOG(3, "thread: %u exited loopForever (hasTasks: %u)\n",
         mgr->idx, mgr->manager->hasTasks());
 
    if (waitNoReady) {
